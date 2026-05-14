@@ -149,6 +149,16 @@ describe("Playwright Monitor", () => {
         assert.strictEqual(context.navigationTimeoutSet, 24000);
     });
 
+    test("runWithTimeout() suppresses late rejections after timeout", async () => {
+        const monitorType = new PlaywrightMonitorType();
+        const lateRejection = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error("late failure")), 20);
+        });
+
+        await assert.rejects(() => monitorType.runWithTimeout(lateRejection, 1), /Scenario timed out after 1ms\./);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
 
     test("formatScenarioError() returns concise assertion summary", () => {
         const monitorType = new PlaywrightMonitorType();

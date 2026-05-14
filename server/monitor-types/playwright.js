@@ -111,13 +111,17 @@ class PlaywrightMonitorType extends MonitorType {
      */
     async runWithTimeout(promise, timeoutMs) {
         let timeoutID;
+        const scenarioPromise = Promise.resolve(promise);
         const timeoutPromise = new Promise((_, reject) => {
             timeoutID = setTimeout(() => {
+                // The caller will close the browser context after timing out, which can
+                // still cause the scenario promise to reject later.
+                scenarioPromise.catch(() => {});
                 reject(new Error(`Scenario timed out after ${timeoutMs}ms.`));
             }, timeoutMs);
         });
         try {
-            return await Promise.race([promise, timeoutPromise]);
+            return await Promise.race([scenarioPromise, timeoutPromise]);
         } finally {
             clearTimeout(timeoutID);
         }
