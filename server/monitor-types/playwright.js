@@ -29,6 +29,10 @@ class PlaywrightMonitorType extends MonitorType {
 
     /**
      * Executes the scenario in the current process
+     * @param monitor
+     * @param script
+     * @param actionTimeoutMs
+     * @param masterTimeoutMs
      */
     async runScenarioInBand(monitor, script, actionTimeoutMs, masterTimeoutMs) {
         const browser = await browserRuntime.getBrowserForMonitor(monitor);
