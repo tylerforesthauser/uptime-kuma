@@ -1,14 +1,14 @@
 const { chromium } = require("playwright-core");
+const { log } = require("../../src/util");
 const { Settings } = require("../settings");
 const childProcess = require("child_process");
+const config = require("../config");
 const { RemoteBrowser } = require("../remote-browser");
 const { commandExists } = require("../util-server");
-const { log } = require("../../src/util");
-const config = require("../config");
 
 /**
  * Cached instance of a browser
- * @type {import("playwright-core").Browser}
+ * @type {import ("playwright-core").Browser}
  */
 let browser = null;
 
@@ -67,6 +67,54 @@ async function isAllowedChromeExecutable(executablePath) {
 }
 
 /**
+ * Get the current instance of the browser. If there isn't one, create
+ * it.
+ * @returns {Promise<import ("playwright-core").Browser>} The browser
+ */
+async function getBrowser() {
+    if (browser && browser.isConnected()) {
+        return browser;
+    } else {
+        let executablePath = await Settings.get("chromeExecutable");
+
+        executablePath = await prepareChromeExecutable(executablePath);
+
+        browser = await chromium.launch({
+            //headless: false,
+            executablePath,
+        });
+
+        return browser;
+    }
+}
+
+/**
+ * Get the current instance of the browser. If there isn't one, create it
+ * @param {integer} remoteBrowserID Path to executable
+ * @param {integer} userId User ID
+ * @returns {Promise<Browser>} The browser
+ */
+async function getRemoteBrowser(remoteBrowserID, userId) {
+    let remoteBrowser = await RemoteBrowser.get(remoteBrowserID, userId);
+    log.debug("chromium", `Using remote browser: ${remoteBrowser.name} (${remoteBrowser.id})`);
+    browser = await chromium.connect(remoteBrowser.url);
+    return browser;
+}
+
+/**
+ * Get the current instance of the browser. If monitor has a remote browser configured,
+ * connect to it instead of launching local Chromium.
+ * @param {object} monitor Monitor bean
+ * @returns {Promise<import("playwright-core").Browser>}
+ */
+async function getBrowserForMonitor(monitor) {
+    if (monitor.remote_browser) {
+        return getRemoteBrowser(monitor.remote_browser, monitor.user_id);
+    }
+    return getBrowser();
+}
+
+/**
  * Prepare the chrome executable path
  * @param {string} executablePath Path to chrome executable
  * @returns {Promise<string>} Executable path
@@ -96,55 +144,15 @@ async function prepareChromeExecutable(executablePath) {
 }
 
 /**
- * Get the current instance of the local browser. If there isn't one, create it.
- * @returns {Promise<import("playwright-core").Browser>}
- */
-async function getBrowser() {
-    if (browser && browser.isConnected()) {
-        return browser;
-    }
-
-    let executablePath = await Settings.get("chromeExecutable");
-    executablePath = await prepareChromeExecutable(executablePath);
-
-    browser = await chromium.launch({
-        executablePath,
-    });
-
-    return browser;
-}
-
-/**
- * Get the current instance of the browser. If monitor has a remote browser configured,
- * connect to it instead of launching local Chromium.
- * @param {object} monitor Monitor bean
- * @returns {Promise<import("playwright-core").Browser>}
- */
-async function getBrowserForMonitor(monitor) {
-    if (monitor.remote_browser) {
-        return getRemoteBrowser(monitor.remote_browser, monitor.user_id);
-    }
-    return getBrowser();
-}
-
-/**
- * Get a remote browser connection.
- * @param {integer} remoteBrowserID Remote browser id
- * @param {integer} userId User ID
- * @returns {Promise<import("playwright-core").Browser>}
- */
-async function getRemoteBrowser(remoteBrowserID, userId) {
-    let remoteBrowser = await RemoteBrowser.get(remoteBrowserID, userId);
-    log.debug("chromium", `Using remote browser: ${remoteBrowser.name} (${remoteBrowser.id})`);
-    browser = await chromium.connect(remoteBrowser.url);
-    return browser;
-}
-
-/**
  * Installs Chromium and required font packages via APT if the Chromium executable
  * is not already available.
- * @param {string} executablePath Path to chromium executable
- * @returns {Promise<void>}
+ * @async
+ * @param {string} executablePath - Path to the Chromium executable used to check
+ * whether Chromium is available and to query its version after installation.
+ * @returns {Promise<void>} Resolves when Chromium is successfully installed or
+ * when no installation is required.
+ * @throws {Error} If the APT installation fails or exits with an unexpected
+ * exit code.
  */
 async function installChromiumViaApt(executablePath) {
     if (await commandExists(executablePath)) {
@@ -156,6 +164,7 @@ async function installChromiumViaApt(executablePath) {
             "apt update && apt --yes --no-install-recommends install chromium fonts-indic fonts-noto fonts-noto-cjk"
         );
 
+        // On exit
         child.on("exit", (code) => {
             log.info("chromium", "apt install chromium exited with code " + code);
 
@@ -177,6 +186,7 @@ async function installChromiumViaApt(executablePath) {
  * Find the chrome executable
  * @param {string[]} executables Executables to search through
  * @returns {Promise<string>} Executable
+ * @throws {Error} Could not find executable
  */
 async function findChrome(executables) {
     // Use the last working executable, so we don't have to search for it again
@@ -196,7 +206,7 @@ async function findChrome(executables) {
 }
 
 /**
- * Reset cached chrome/browser connection.
+ * Reset chrome
  * @returns {Promise<void>}
  */
 async function resetChrome() {
@@ -207,7 +217,7 @@ async function resetChrome() {
 }
 
 /**
- * Test if chrome executable is valid and return version.
+ * Test if the chrome executable is valid and return the version
  * @param {string} executablePath Path to executable
  * @returns {Promise<string>} Chrome version
  */
@@ -217,36 +227,36 @@ async function testChrome(executablePath) {
 
         log.info("chromium", "Testing Chromium executable: " + executablePath);
 
-        const testBrowser = await chromium.launch({
+        const browser = await chromium.launch({
             executablePath,
         });
-        const version = testBrowser.version();
-        await testBrowser.close();
+        const version = browser.version();
+        await browser.close();
         return version;
     } catch (e) {
         throw new Error(e.message);
     }
 }
-
+// test remote browser
 /**
- * Test remote browser connectivity.
- * @param {string} remoteBrowserURL Remote browser URL
- * @returns {Promise<boolean>} True if connection worked
+ * @param {string} remoteBrowserURL Remote Browser URL
+ * @returns {Promise<boolean>} Returns if connection worked
  */
 async function testRemoteBrowser(remoteBrowserURL) {
     try {
-        const testBrowser = await chromium.connect(remoteBrowserURL);
-        testBrowser.version();
-        await testBrowser.close();
+        const browser = await chromium.connect(remoteBrowserURL);
+        browser.version();
+        await browser.close();
         return true;
     } catch (e) {
         throw new Error(e.message);
     }
 }
 
+
 module.exports = {
     getBrowserForMonitor,
-    resetChrome,
     testChrome,
+    resetChrome,
     testRemoteBrowser,
 };
